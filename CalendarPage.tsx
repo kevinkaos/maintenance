@@ -1,207 +1,244 @@
-import { useState, useRef, useMemo, useCallback, useEffect, MouseEvent } from 'react';
-import FullCalendar, { EventApi, EventContentArg, EventInput } from '@fullcalendar/react';
-import dayGridPlugin from '@fullcalendar/daygrid';
-import timeGridPlugin from '@fullcalendar/timegrid';
-import interactionPlugin from '@fullcalendar/interaction';
-import luxonPlugin from '@fullcalendar/luxon';
-import resourceTimelinePlugin from '@fullcalendar/resource-timeline';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import {
-    ETaskStatus,
-    ETaskCheckItemStatus,
-    useTaskRecordsPortalValidActionsQuery,
-    Maybe,
-    ETaskValidAction,
-    useTaskRecordsStatusSummaryByDateQuery,
-} from 'graphqlApi';
-import { DateTime, Duration } from 'luxon';
-import { createStyles, makeStyles, Theme, Typography } from '@material-ui/core';
-import {
-    FitRelative,
-    ScrollableContent,
-    AdvCalendarWeekAndDayEventCard,
-    EStatusColor,
-    TaskStatusFullNameMappingString,
-    AdvCalendarMonthCard,
+    IfpToolbar,
+    BreadcrumbLink,
     palette,
-} from 'common';
-import { MODAL_TYPES, useGlobalModalContext } from 'helpers/context/GlobalModal';
-import { isEnumValue } from 'common/utils';
-import CalendarPopover from './CalendarPopover';
-import CalendarToolbar from './CalendarToolbar';
-import { CalendarViewType } from './CalendarToolbar';
-import clsx from 'clsx';
+    IfpIconButton,
+    IfpToolbarVariant,
+    withStringEnumParam,
+    IfpButton,
+} from '@advifactory/ifp-ui-core';
+import { Breadcrumbs, createStyles, makeStyles, Theme, Typography } from '@material-ui/core';
 import { useTranslation } from 'react-i18next';
+import { MainFooter, MonthSelector, QueryParam, routePaths } from '../..';
+import MainHeader from '../../Layout/MainHeader';
+import { AdvIcons } from 'components';
+import clsx from 'clsx';
+import { useQueryParam, withDefault } from 'use-query-params';
+import { EMobileTaskTabType } from 'genres/mobile-layout';
+import CalendarContent from './CalendarContent';
+import SearchBar from '../../dialogs/SearchBar';
+import { EUserRole } from 'genres';
+import { useCurrentRole } from 'common/components/MobileGlobalState';
+import {
+    ERole,
+    ESortOrder,
+    ETaskCategory,
+    ETaskStatus,
+    useTaskRecordsMobileQuery,
+    useTaskRecordsMobileSummaryLazyQuery,
+} from 'graphqlApi';
+import { useUser } from 'contexts/UserHooks';
+import { DateTypeSelector } from '../../dialogs';
+import { EMobileCalendarType } from 'views/Mobile/SharePages/AdvMobileCalendarHeader';
+import WeekSelector from '../../WeekSelector';
+import { DateTime } from 'luxon';
+import RepairRequestFormDialog from '../../dialogs/RepairRequestFormDialog';
+import { images } from 'common';
+import { MODAL_TYPES, useGlobalModalContext } from 'helpers/context/GlobalModal';
 import { getErrorContent } from 'helpers/utils';
-const Calendar = require('rc-year-calendar');
-require('rc-year-calendar/locales/rc-year-calendar.zh-TW');
-require('rc-year-calendar/locales/rc-year-calendar.zh-CN');
 
 const useStyles = makeStyles(
     (theme: Theme) =>
         createStyles({
-            root: {
+            mobileBreadcrumbFontSize: {
+                fontSize: '12px',
+            },
+            mobileBreadCrumbBgColor: {
+                backgroundColor: palette.grayLight,
+            },
+            iconSize: {
+                width: '24px',
+                height: '24px',
+            },
+            iconPaddingRight: {
+                paddingRight: '8px',
+            },
+            tab: {
+                maxWidth: '100%',
+                '& .MuiTab-wrapper': {
+                    justifyContent: 'center',
+                },
+            },
+            muiTabsRoot: {
                 width: '100%',
-                height: '100%',
-                minWidth: '700px',
+            },
+            mobileHeaderMain: {
+                height: '32px',
+                fontSize: '20px',
+                fontWeight: 'bold',
                 display: 'flex',
-                flexDirection: 'column',
             },
-            calendarWrapper: {
-                position: 'relative',
-                flexGrow: 1,
-                flexShrink: 0,
-            },
-            calendar: {
-                minHeight: '400px',
-            },
-            displayNone: {
-                display: 'none',
-                height: 0,
-                width: 0,
-            },
-            yearView: {
-                maxWidth: '75%',
-                '& .calendar .calendar-header': {
-                    display: 'none',
-                },
-                '& .calendar': {
-                    height: '66vh',
-                },
+            mobileHeaderIcons: {
+                marginLeft: 'auto',
             },
             flex: {
                 display: 'flex',
             },
-            flexColumn: {
-                display: 'flex',
-                flexDirection: 'column',
-                maxHeight: '66vh',
-                overflow: 'scroll',
-                marginLeft: 'auto',
-                width: '25%',
+            requestFormBtn: {
+                borderRadius: '50%',
+                width: '56px',
+                height: '56px',
+                position: 'absolute',
+                bottom: '66px',
+                right: '12px',
+                padding: '4px',
+                boxShadow: '0 2px 8px 0 rgba(0, 0, 0, 0.5)',
+                backgroundImage: `linear-gradient(315deg, ${palette.purpleBase}, ${palette.blueBase})`,
             },
-            minHeightCard: {
-                minHeight: '6rem',
-                maxHeight: '7rem',
-            },
-            eventsPadding: {
-                padding: '1rem',
+            mt2: {
+                marginTop: '2px',
             },
         }),
-    { name: 'PortalCalendarPage' },
+    { name: 'CalendarPage' },
 );
 
-export enum CalendarView {
-    Day = 'timeGridDay',
-    Week = 'timeGridWeek',
-    Month = 'dayGridMonth',
-    Year = 'year',
-}
-
-export enum ActionMapping {
-    Progress = 'Accept',
-    Reassign = 'Reject',
-    Withdraw = 'Withdraw',
-    Finish = 'Finish',
-    SendNotice = 'Send Notice',
-    Pass = 'Pass',
-    Fail = 'Fail',
-    Cancel = 'Cancel',
-    Assign = 'Reassign',
-    Remove = 'Remove',
-}
-
-const MaxTaskRecordsInCalendarDateRange = 999;
-
-function CalendarPage() {
-    const classes = useStyles();
+const CalendarPage = () => {
     const { t, i18n } = useTranslation();
     let IFPLang = i18n.language;
-    const calendarRef = useRef<FullCalendar>(null);
-    const getCalendarApi = useCallback(() => calendarRef.current?.getApi(), [calendarRef]);
+    const classes = useStyles();
+    const { currentRole } = useCurrentRole();
+    const user = useUser();
+    const initialUserRole = user.roles?.length ? user.roles[0] : EUserRole.None;
+    const [isOpenDateTypeSelector, setIsOpenDateTypeSelector] = useState<boolean>(false);
+    const [isOpenRequestForm, setIsOpenRequestForm] = useState<boolean>(false);
+    const { showModal } = useGlobalModalContext();
+    // query params
+    const [queryParamRole, setQueryParamRole] = useQueryParam(
+        QueryParam.Role,
+        withDefault(
+            withStringEnumParam(EUserRole),
+            currentRole === EUserRole.None ? initialUserRole : (currentRole as EUserRole),
+        ),
+    );
+    const [currentDateType, setCurrentDateType] = useQueryParam(
+        QueryParam.DateType,
+        withDefault(withStringEnumParam(EMobileCalendarType), EMobileCalendarType.Week),
+    );
+
+    useEffect(() => {
+        // initialize query params
+        setQueryParamRole(
+            currentRole === EUserRole.None ? initialUserRole : (currentRole as EUserRole),
+            'replaceIn',
+        );
+        setCurrentDateType(EMobileCalendarType.Week, 'replaceIn');
+    }, [currentRole, initialUserRole, setCurrentDateType, setQueryParamRole]);
+
+    const [maintainerUserIds, setMaintainerUserIds] = useState<string[]>([]);
+    const [page, setPage] = useState(0);
+    const [pageSize, setPageSize] = useState(10);
+    const [statusFilter, setStatusFilter] = useState<ETaskStatus[]>([
+        ETaskStatus.Assigned,
+        ETaskStatus.InProgress,
+        ETaskStatus.InReview,
+        ETaskStatus.Completed,
+    ]);
+    const [taskCategories] = useState<ETaskCategory[]>([
+        ETaskCategory.Daily,
+        ETaskCategory.Regular,
+        ETaskCategory.Annual,
+        ETaskCategory.Repair,
+    ]);
+    const [selectedMachineIds, setSelectedMachineIds] = useState<string[]>([]);
+    const [activeSort, setActiveSort] = useState<string | undefined>(void 0);
+    const [sortingOrder, setSortingOrder] = useState(ESortOrder.Desc);
+    const [search, setSearch] = useState<string>('');
+    const [isOpenSearchBar, setIsOpenSearchBar] = useState<boolean>(false);
+    // const [dateRange, setDateRange] = useState<{
+    //     startDate: Date | undefined;
+    //     endDate: Date | undefined;
+    // }>({ startDate: void 0, endDate: void 0 });
     const dt = DateTime.local();
-    // const [querySkip, setQuerySkip] = useState<boolean>(true);
-
     // minus 1 day, because Luxon starts week at Monday instead of Sunday
-    const startOfCurrentWeek = getCalendarApi()
-        ? new Date(getCalendarApi()?.view.currentStart ?? new Date()).toISOString()
-        : new Date(dt.startOf('week').minus({ days: 1 }).toISO()).toISOString();
-
-    const endOfCurrentWeek = getCalendarApi()
-        ? new Date(getCalendarApi()?.view.currentEnd ?? new Date()).toISOString()
-        : new Date(dt.endOf('week').minus({ days: 1 }).toISO()).toISOString();
+    const startOfCurrentWeek = new Date(
+        dt.startOf('week').minus({ days: 1 }).toISO(),
+    ).toISOString();
+    const endOfCurrentWeek = new Date(dt.endOf('week').toISO()).toISOString();
     const [startDate, setStartDate] = useState(startOfCurrentWeek);
     const [endDate, setEndDate] = useState(endOfCurrentWeek);
-    const [startYearDate, setStartYearDate] = useState(
-        new Date(new Date().getFullYear(), 0, 1).toISOString(),
-    );
-    const [endYearDate, setEndYearDate] = useState(
-        new Date(new Date().getFullYear() + 1, 0, 1).toISOString(),
-    );
-
+    const [showDate, setShowDate] = useState<Date>(new Date());
+    const [targetDate, setTargetDate] = useState<Date>(new Date());
     const [dateString, setDateString] = useState<string>(
-        `${DateTime.fromISO(startDate).toFormat(
-            `MMM dd'-'${DateTime.fromISO(endDate).minus({ days: 1 }).toFormat('dd')}', 'y`,
+        `${DateTime.fromISO(startDate ?? new Date().toISOString()).toFormat(
+            `MMM dd'-'${DateTime.fromISO(endDate ?? new Date().toISOString())
+                .minus({ days: 1 })
+                .toFormat('dd')}', 'y`,
         )}`,
     );
-    const [selectedDate, setSelectedDate] = useState(new Date(startDate));
-    const [selectedEvent, setSelectedEvent] = useState<EventApi>();
-    const [selectedEventAnchorEl, setSelectedEventAnchorEl] = useState<HTMLElement>();
-    const [, setCalendarView] = useState<CalendarViewType>(CalendarView.Week);
-    const [showYearView, setShowYearView] = useState<boolean>(false);
-    const [year, setYear] = useState(new Date().getFullYear());
-    const calendarView = getCalendarApi()?.view.type as CalendarView;
-    const { showModal } = useGlobalModalContext();
-    const {
-        data: statusSummaryByDateData,
-        loading: statusSummaryByDateLoading,
-        refetch: statusSummaryByDateRefetch,
-        error: statusSummaryByDateError,
-    } = useTaskRecordsStatusSummaryByDateQuery({
+    const isSkipQuery = currentRole === EUserRole.None;
+
+    const [
+        taskRecordMobileSummaryLazyQuery,
+        {
+            data: mobileSummaryData,
+            // loading: mobileSummaryLoading,
+            refetch: mobileSummaryRefetch,
+            error: mobileSummaryError,
+        },
+    ] = useTaskRecordsMobileSummaryLazyQuery({
         variables: {
             filterInput: {
-                dateRange: {
-                    startDate: startYearDate,
-                    endDate: endYearDate,
-                },
-                timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                role: currentRole as ERole,
             },
         },
-        skip: showYearView === false ? true : false,
+        fetchPolicy: 'no-cache',
         errorPolicy: 'all',
     });
 
     useEffect(() => {
-        if (statusSummaryByDateError) {
+        if (mobileSummaryError) {
             showModal(MODAL_TYPES.DANGER_MODAL, {
                 show: true,
                 title: t(`mi-maintenance.GetSummaryError`),
-                content: getErrorContent(statusSummaryByDateError).map((errorReason: string) =>
+                content: getErrorContent(mobileSummaryError).map((errorReason: string) =>
                     t(`mi-maintenance.${errorReason}`),
                 ),
                 closeText: t('mi-maintenance.DialogClose'),
             });
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [JSON.stringify(statusSummaryByDateError, null, 2)]);
+    }, [JSON.stringify(mobileSummaryError, null, 2)]);
 
     const {
         data: taskRecordsData,
         loading: taskRecordsLoading,
         refetch: taskRecordsRefetch,
         error: taskRecordsError,
-    } = useTaskRecordsPortalValidActionsQuery({
+    } = useTaskRecordsMobileQuery({
         variables: {
-            pagingInput: { page: 1, pageSize: MaxTaskRecordsInCalendarDateRange },
+            pagingInput: {
+                page: page + 1,
+                pageSize: pageSize,
+            },
+            sortingInput: {
+                field: activeSort,
+                order: sortingOrder,
+            },
             filterInput: {
+                searchText: search === '' ? void 0 : search,
+                statuses: statusFilter,
+                categories:
+                    queryParamRole === EUserRole.Requester
+                        ? [ETaskCategory.Repair]
+                        : taskCategories,
+                machineIds: selectedMachineIds,
+                maintainerUserIds: maintainerUserIds,
+                role: currentRole as ERole,
                 dateRange: {
-                    startDate,
-                    endDate,
+                    startDate: targetDate
+                        ? DateTime.fromJSDate(targetDate).startOf('day').toJSDate().toISOString()
+                        : void 0,
+                    endDate: targetDate
+                        ? DateTime.fromJSDate(targetDate).endOf('day').toJSDate().toISOString()
+                        : void 0,
                 },
             },
         },
-        skip: !getCalendarApi(),
-        fetchPolicy: 'network-only',
+        skip: isSkipQuery,
+        fetchPolicy: 'no-cache',
         errorPolicy: 'all',
+        notifyOnNetworkStatusChange: true,
     });
 
     useEffect(() => {
@@ -218,152 +255,14 @@ function CalendarPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [JSON.stringify(taskRecordsError, null, 2)]);
 
-    // Check to see if difference between start and end date qualifies as all day event
-    const checkIsAllDayEvent = (start: any, end: any): boolean => {
-        const allDayDuration = Duration.fromObject({ hours: 23, minutes: 59 }).as('minutes');
-        const endLux = DateTime.fromISO(end);
-        const startLux = DateTime.fromISO(start);
-        const diffInMins = endLux.diff(startLux, 'minutes');
-        return diffInMins.as('minutes') >= allDayDuration;
-    };
+    const taskRecordsPagingInfo = taskRecordsData?.taskRecords?.pagingInfo;
+    const inboxSummary = mobileSummaryData?.taskRecords?.inboxSummary?.needProcessCount;
+    const taskRecords = taskRecordsData?.taskRecords?.results ?? [];
+    const doing = taskRecordsLoading;
 
-    // Check to see if task record is overdue
-    const getIsOverdue = useCallback((endDate: Maybe<string | undefined>, status: ETaskStatus) => {
-        const timeNow = new Date().getTime();
-
-        if (status === ETaskStatus.Completed || status === ETaskStatus.Cancelled) return false;
-
-        return timeNow > new Date(endDate ?? timeNow).getTime();
-    }, []);
-
-    // Calculate total reviewers PASSED
-    const getPassedReviewersCount = useCallback((taskRecord: any) => {
-        if (taskRecord.status === ETaskStatus.InReview) {
-            const totalReviewers = taskRecord.reviewerUsers?.length || 0;
-            let passedReviews = 0;
-            let passedReviewers = 0;
-            taskRecord.checkItems?.forEach((checkItem: any) => {
-                if (
-                    checkItem.status === ETaskCheckItemStatus.Done &&
-                    !!checkItem.reviewerUsers.find((x: any) => x.action === ETaskValidAction.Pass)
-                ) {
-                    passedReviews++;
-                } else if (checkItem.status === ETaskCheckItemStatus.Pass) {
-                    passedReviewers = totalReviewers;
-                }
-            });
-
-            if (passedReviews === taskRecord.checkItems.length) {
-                passedReviewers++;
-            }
-
-            return ` ${passedReviewers}/${totalReviewers}`;
-        }
-    }, []);
-
-    const taskRecords = taskRecordsData?.taskRecords?.results;
-
-    const yearEvents = useMemo(() => {
-        if (!statusSummaryByDateData?.taskRecords?.statusSummaryByDate) return;
-        const dates = Object.keys(statusSummaryByDateData.taskRecords.statusSummaryByDate)?.map(
-            (date) => DateTime.fromFormat(date, 'yyyyLLdd').toJSDate(),
-        );
-        const yearEvents = dates.map((date: any, index: number) => {
-            return {
-                id: index,
-                name: date,
-                startDate: date,
-                endDate: date,
-                color: palette.purpleLight,
-            };
-        });
-        yearEvents.push({
-            id: dates.length + 999,
-            name: 'today',
-            startDate: new Date(),
-            endDate: new Date(),
-            color: palette.blueLight,
-        });
-        return yearEvents;
-    }, [statusSummaryByDateData?.taskRecords?.statusSummaryByDate]);
-
-    const events = useMemo(
-        () =>
-            taskRecords?.map((taskRecord) => {
-                const status = taskRecord.status.replace(/([A-Z])/g, ' $1').trim();
-
-                const maintainerUsers = taskRecord.checkItems?.map((checkItem: any) => {
-                    return checkItem.taskCheckItem.maintainerUser.name;
-                });
-
-                const uniqueMaintainerUsers = [...Array.from(new Set(maintainerUsers))];
-
-                return {
-                    id: taskRecord.id,
-                    title: taskRecord.category,
-                    extendedProps: {
-                        maintainerUsers: uniqueMaintainerUsers,
-                        reviewerUsers: taskRecord.reviewerUsers,
-                        taskNo: taskRecord.taskNo,
-                        isOverdue: getIsOverdue(taskRecord.dateRange?.endDate, taskRecord.status),
-                        validActions: taskRecord.validActions,
-                        dateRange: taskRecord.dateRange,
-                        status,
-                        reviewStatus: getPassedReviewersCount(taskRecord),
-                        machine: taskRecord.machine,
-                        color:
-                            taskRecord.status === ETaskStatus.Assigned
-                                ? EStatusColor.Yellow
-                                : taskRecord.status === ETaskStatus.Completed
-                                ? EStatusColor.Green
-                                : taskRecord.status === ETaskStatus.InReview
-                                ? EStatusColor.Blue
-                                : taskRecord.status === ETaskStatus.Cancelled
-                                ? EStatusColor.Gray
-                                : EStatusColor.Orange,
-                    },
-                    start: taskRecord.dateRange?.startDate,
-                    end: taskRecord.dateRange?.endDate,
-                    allDay: checkIsAllDayEvent(
-                        taskRecord.dateRange?.startDate,
-                        taskRecord.dateRange?.endDate,
-                    ),
-                } as EventInput;
-            }),
-        [getIsOverdue, getPassedReviewersCount, taskRecords],
-    );
-
-    const disabled = taskRecordsLoading || statusSummaryByDateLoading;
-
-    function determineEventMaxStack() {
-        if (!getCalendarApi()) return;
-        if (getCalendarApi()?.view.type === CalendarView.Day) return 6;
-        else if (getCalendarApi()?.view.type === CalendarView.Week) return 2;
-        else return 4;
-    }
-
-    function handleEventClick(eventApi: EventApi) {
-        return (event: MouseEvent<HTMLElement>) => {
-            setSelectedEvent(eventApi);
-            setSelectedEventAnchorEl(event.currentTarget);
-        };
-    }
-
-    function handleEventPopoverClose() {
-        setSelectedEvent(void 0);
-        setSelectedEventAnchorEl(void 0);
-    }
-
-    const setStartAndEndDate = useCallback(() => {
-        if (!getCalendarApi()) return;
-        setStartDate(new Date(getCalendarApi()?.view.currentStart ?? new Date()).toISOString());
-        setEndDate(new Date(getCalendarApi()?.view.currentEnd ?? new Date()).toISOString());
-    }, [getCalendarApi]);
-
-    const setReactDatePicker = useCallback(() => {
-        if (!getCalendarApi()) return;
-        return setSelectedDate(getCalendarApi()?.getDate() ?? new Date());
-    }, [getCalendarApi]);
+    const inboxCount = useMemo(() => {
+        return inboxSummary;
+    }, [inboxSummary]);
 
     const formatCurrentDate = useCallback(() => {
         const dayString = `${DateTime.fromISO(startDate)
@@ -380,246 +279,185 @@ function CalendarPage() {
             .setLocale(IFPLang ?? 'en-US')
             .toFormat('MMM yyyy')}`;
 
-        switch (calendarView) {
-            case CalendarView.Day:
+        switch (currentDateType) {
+            case EMobileCalendarType.Day:
                 return setDateString(dayString);
-            case CalendarView.Week:
+            case EMobileCalendarType.Week:
                 return setDateString(weekString);
 
-            case CalendarView.Month:
+            case EMobileCalendarType.Month:
                 return setDateString(monthString);
             default:
                 return;
         }
-    }, [IFPLang, calendarView, endDate, startDate]);
-
-    const changeCalendarView = (type: CalendarViewType | string) => {
-        return (_: MouseEvent<HTMLElement>) => {
-            if (!getCalendarApi()) return;
-            if (type !== 'year') {
-                setShowYearView(false);
-                getCalendarApi()?.changeView(type);
-                setCalendarView(type as CalendarViewType);
-                setStartAndEndDate();
-                setReactDatePicker();
-                formatCurrentDate();
-            } else {
-                setStartYearDate(new Date(new Date().getFullYear(), 0, 1).toISOString());
-                setEndYearDate(new Date(new Date().getFullYear() + 1, 0, 1).toISOString());
-                setSelectedDate(dt.startOf('day').toJSDate());
-                setDateString(new Date().getFullYear().toString());
-                setShowYearView(true);
-                setStartDate(dt.startOf('day').toISO());
-                setEndDate(dt.startOf('day').plus({ days: 1 }).minus({ minutes: 1 }).toISO());
-            }
-        };
-    };
-
-    function renderEventContent({ event }: EventContentArg) {
-        const {
-            color,
-            machine: { name: machineName },
-            status,
-            reviewStatus,
-            isOverdue,
-            dateRange,
-        } = event.extendedProps;
-
-        const { startDate, endDate } = dateRange;
-
-        return calendarView === CalendarView.Month ? (
-            <AdvCalendarMonthCard
-                title={event.title as TaskStatusFullNameMappingString}
-                color={isEnumValue(color, EStatusColor) ? color : void 0}
-                active={selectedEvent?.id === event.id}
-                onClick={handleEventClick(event)}
-                machineName={machineName}
-                status={status}
-                isOverdue={isOverdue}
-                reviewStatus={reviewStatus}
-                endDate={endDate}
-                startDate={startDate}
-            />
-        ) : (
-            <AdvCalendarWeekAndDayEventCard
-                title={event.title as TaskStatusFullNameMappingString}
-                color={isEnumValue(color, EStatusColor) ? color : void 0}
-                active={selectedEvent?.id === event.id}
-                onClick={handleEventClick(event)}
-                machineName={machineName}
-                status={status}
-                isOverdue={isOverdue}
-                reviewStatus={reviewStatus}
-                endDate={endDate}
-                startDate={startDate}
-            />
-        );
-    }
-
-    function onMoreLinkClick(info: any) {
-        if (calendarView === CalendarView.Month && getCalendarApi()) {
-            setCalendarView(CalendarView.Day);
-            setReactDatePicker();
-            formatCurrentDate();
-            getCalendarApi()?.gotoDate(info.date);
-            getCalendarApi()?.changeView(CalendarView.Day);
-            setStartAndEndDate();
-            return;
-        }
-        return 'popover';
-    }
-
-    function renderDayEvents(e: any) {
-        setSelectedDate(e.date);
-        setStartDate(new Date(e.date).toISOString());
-        setEndDate(DateTime.fromJSDate(e.date).plus({ days: 1 }).minus({ minutes: 1 }).toISO());
-    }
+    }, [IFPLang, currentDateType, endDate, startDate]);
 
     useEffect(() => {
-        if (showYearView) return;
-        setStartAndEndDate();
-        formatCurrentDate();
-        setReactDatePicker();
-    }, [formatCurrentDate, setReactDatePicker, setStartAndEndDate, showYearView]);
-
-    useEffect(() => {
-        if (!showYearView) return;
-        statusSummaryByDateRefetch();
-    }, [statusSummaryByDateRefetch, year, showYearView]);
-
-    // useEffect(() => {
-    //     if (!!!getCalendarApi()) return;
-    //     setQuerySkip(false);
-    // }, [getCalendarApi]);
+        if (isSkipQuery) return;
+        taskRecordMobileSummaryLazyQuery();
+    }, [isSkipQuery, taskRecordMobileSummaryLazyQuery]);
 
     useEffect(() => {
         taskRecordsRefetch();
-    }, [taskRecordsRefetch, showYearView]);
+    }, [taskRecordsRefetch]);
+
+    useEffect(() => {
+        formatCurrentDate();
+    }, [formatCurrentDate]);
 
     return (
-        <div className={classes.root}>
-            <CalendarToolbar
-                showYearBtn
-                setStartDate={setStartDate}
-                setEndDate={setEndDate}
-                setStartYearDate={setStartYearDate}
-                setEndYearDate={setEndYearDate}
-                setYear={setYear}
-                showYearView={showYearView}
-                setDateString={setDateString}
-                calendarRef={calendarRef}
-                dateString={dateString}
-                disabled={disabled}
-                selectedDate={selectedDate}
-                setSelectedDate={setSelectedDate}
-                setReactDatePicker={setReactDatePicker}
-                setStartAndEndDate={setStartAndEndDate}
-                changeCalendarView={changeCalendarView}
-                toolbarType={'calendar'}
-                formatCurrentDate={formatCurrentDate}
-            />
-            <div className={clsx(classes.calendarWrapper, { [classes.displayNone]: showYearView })}>
-                <FitRelative>
-                    <ScrollableContent hideScrollbar>
-                        <FullCalendar
-                            ref={calendarRef}
-                            schedulerLicenseKey={process.env.REACT_APP_FULL_CALENDAR_LICENSE_KEY}
-                            plugins={[
-                                dayGridPlugin,
-                                timeGridPlugin,
-                                interactionPlugin,
-                                luxonPlugin,
-                                resourceTimelinePlugin,
-                            ]}
-                            contentHeight={'auto'}
-                            locale={
-                                IFPLang?.toLowerCase() === 'en-us' ? 'en' : IFPLang?.toLowerCase()
-                            }
-                            moreLinkClick={onMoreLinkClick}
-                            scrollTime="00:00:00"
-                            viewClassNames={[
-                                'holiday-calendar',
-                                clsx(classes.calendar, { [classes.displayNone]: showYearView }),
-                            ]}
-                            showNonCurrentDates={false}
-                            titleFormat="LLLL d, yyyy"
-                            headerToolbar={false}
-                            initialView="timeGridWeek"
-                            eventColor="transparent"
-                            eventBackgroundColor="transparent"
-                            eventBorderColor="transparent"
-                            dayMaxEvents={2}
-                            eventMaxStack={determineEventMaxStack()}
-                            weekends={true}
-                            events={events}
-                            eventContent={renderEventContent}
-                        />
-
-                        {selectedEvent && (
-                            <CalendarPopover
-                                event={selectedEvent}
-                                selectedEventAnchorEl={selectedEventAnchorEl}
-                                handleEventPopoverClose={handleEventPopoverClose}
-                            />
-                        )}
-                    </ScrollableContent>
-                </FitRelative>
-            </div>
-            {showYearView && (
-                <div className={classes.flex}>
-                    <div className={classes.yearView}>
-                        <Calendar
-                            allowOverlap={true}
-                            year={year}
-                            language={IFPLang ?? 'en-US'}
-                            // eslint-disable-next-line react/style-prop-object
-                            style="border"
-                            dataSource={yearEvents}
-                            onDayClick={renderDayEvents}
-                        />
-                    </div>
-                    <div className={clsx(classes.flexColumn, classes.eventsPadding)}>
+        <div>
+            <MainHeader />
+            <IfpToolbar
+                variant={IfpToolbarVariant.Large}
+                className={clsx(classes.mobileBreadCrumbBgColor, classes.mt2)}
+            >
+                <div style={{ width: '100%' }}>
+                    <Breadcrumbs classes={{ root: classes.mobileBreadcrumbFontSize }}>
+                        <BreadcrumbLink
+                            to={routePaths.home}
+                            classes={{ root: classes.mobileBreadcrumbFontSize }}
+                        >
+                            {t('mi-maintenance.NavigationTask')}
+                        </BreadcrumbLink>
                         <Typography
                             variant="h5"
-                            className={classes.eventsPadding}
-                        >{`${DateTime.fromISO(startDate).toFormat('yyyy/LL/dd')} ${t(
-                            `mi-maintenance.schedule`,
-                        )}`}</Typography>
-                        {events?.map((event: any) => {
-                            const {
-                                color,
-                                machine: { name: machineName },
-                                status,
-                                reviewStatus,
-                                isOverdue,
-                                dateRange,
-                            } = event.extendedProps;
-
-                            const { id } = event;
-
-                            const { startDate, endDate } = dateRange;
-                            return (
-                                <AdvCalendarWeekAndDayEventCard
-                                    key={id}
-                                    className={classes.minHeightCard}
-                                    title={event.title as TaskStatusFullNameMappingString}
-                                    color={isEnumValue(color, EStatusColor) ? color : void 0}
-                                    active={selectedEvent?.id === event.id}
-                                    onClick={handleEventClick(event)}
-                                    machineName={machineName}
-                                    status={status}
-                                    isOverdue={isOverdue}
-                                    reviewStatus={reviewStatus}
-                                    endDate={endDate}
-                                    startDate={startDate}
-                                />
-                            );
-                        })}
+                            color="textPrimary"
+                            classes={{ root: classes.mobileBreadcrumbFontSize }}
+                        >
+                            {t('mi-maintenance.MobileBreadcrumbCalendar')}
+                        </Typography>
+                    </Breadcrumbs>
+                    <div className={classes.mobileHeaderMain}>
+                        <div
+                            className={classes.flex}
+                            onClick={() => setIsOpenDateTypeSelector(true)}
+                        >
+                            <div>{dateString}</div>
+                            <div style={{ paddingTop: '2px' }}>
+                                <AdvIcons.BtnMobileDropdownArrowBlack />
+                            </div>
+                        </div>
+                        <div className={classes.mobileHeaderIcons}>
+                            <IfpIconButton
+                                className={clsx(classes.iconSize, classes.iconPaddingRight)}
+                                onClick={() => {
+                                    setIsOpenSearchBar(true);
+                                }}
+                            >
+                                <AdvIcons.BtnMobileBreadcrumbNavigationSearch />
+                            </IfpIconButton>
+                            {/** todo: filter */}
+                            {/* <IfpIconButton
+                                className={clsx(classes.iconSize, classes.iconPaddingRight)}
+                                onClick={() => {}}
+                            >
+                                <AdvIcons.BtnMobileBreadcrumbNavigationFilter />
+                            </IfpIconButton> */}
+                            <IfpIconButton
+                                className={classes.iconSize}
+                                onClick={() => {
+                                    const date = new Date();
+                                    setTargetDate(date);
+                                    setShowDate(date);
+                                    setStartDate(
+                                        DateTime.fromJSDate(date)
+                                            .startOf('week')
+                                            .minus({ days: 1 })
+                                            .toJSDate()
+                                            .toISOString(),
+                                    );
+                                    setEndDate(
+                                        DateTime.fromJSDate(date)
+                                            .endOf('week')
+                                            .toJSDate()
+                                            .toISOString(),
+                                    );
+                                }}
+                            >
+                                <AdvIcons.BtnMobileBreadcrumbNavigationToday />
+                            </IfpIconButton>
+                        </div>
                     </div>
                 </div>
+            </IfpToolbar>
+            <div className={classes.mobileBreadCrumbBgColor}>
+                {currentDateType === EMobileCalendarType.Week && (
+                    <WeekSelector
+                        showDate={showDate}
+                        targetDate={targetDate}
+                        setStartDate={setStartDate}
+                        setEndDate={setEndDate}
+                        changeShowDate={(date) => {
+                            setPage(0);
+                            setShowDate(date);
+                        }}
+                        changeTargetDate={(date) => {
+                            setPage(0);
+                            setTargetDate(date);
+                        }}
+                    />
+                )}
+                {currentDateType === EMobileCalendarType.Month && (
+                    <MonthSelector
+                        showDate={showDate}
+                        targetDate={targetDate}
+                        startDate={startDate}
+                        endDate={endDate}
+                        setStartDate={setStartDate}
+                        setEndDate={setEndDate}
+                        changeShowDate={(date) => {
+                            setPage(0);
+                            setShowDate(date);
+                        }}
+                        changeTargetDate={(date) => {
+                            setPage(0);
+                            setTargetDate(date);
+                        }}
+                    />
+                )}
+            </div>
+            <CalendarContent
+                currentDateType={currentDateType}
+                doing={doing}
+                setPage={setPage}
+                page={page}
+                mobileSummaryRefetch={mobileSummaryRefetch}
+                taskRecordsRefetch={taskRecordsRefetch}
+                taskRecordsPagingInfo={taskRecordsPagingInfo}
+                taskRecords={taskRecords}
+            />
+            <MainFooter
+                inboxCount={inboxCount}
+                setPage={setPage}
+                setQueryParamRole={setQueryParamRole}
+                generalTabType={EMobileTaskTabType.Calendar}
+            />
+            {isOpenDateTypeSelector && (
+                <DateTypeSelector
+                    currentDateType={currentDateType}
+                    onClose={() => setIsOpenDateTypeSelector(false)}
+                    onChange={(type: EMobileCalendarType) => {
+                        setIsOpenDateTypeSelector(false);
+                        setCurrentDateType(type);
+                    }}
+                />
+            )}
+            <SearchBar setSearch={setSearch} open={isOpenSearchBar} setOpen={setIsOpenSearchBar} />
+            {isOpenRequestForm && (
+                <RepairRequestFormDialog open={isOpenRequestForm} setOpen={setIsOpenRequestForm} />
+            )}
+            {queryParamRole === EUserRole.Requester && (
+                <IfpButton
+                    disabled={doing}
+                    onClick={() => setIsOpenRequestForm(true)}
+                    className={classes.requestFormBtn}
+                >
+                    <images.BtnMobileNavigationNewN />
+                </IfpButton>
             )}
         </div>
     );
-}
+};
 
-export default CalendarPage;
+export default memo(CalendarPage);
